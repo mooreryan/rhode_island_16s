@@ -1,0 +1,5 @@
+*.Rproj*
+*.xlsx
+original_reads/*
+merge_reads.rb
+scripts/analysis

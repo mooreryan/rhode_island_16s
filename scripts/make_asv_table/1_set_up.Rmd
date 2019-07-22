@@ -1,0 +1,115 @@
+---
+title: "1. Set Up"
+author: "Ryan M. Moore"
+date: "2019-07-22"
+output:
+  html_document
+params:
+  constants: "../constants.R"
+---
+
+```{r Set environmental variables}
+source(params$constants)
+
+# Set up the environmental variables.  Don't forget to run this if you change anything or restart the server!
+env_var_names <- gsub(".", "_", names(unlist(const)), fixed = TRUE)
+env_vars <- as.list(unlist(const, use.names = FALSE))
+names(env_vars) <- env_var_names
+do.call(Sys.setenv, env_vars)
+```
+
+```{bash Set up work dir}
+# Remove workdir if it exists.
+sudo ruby -e "require 'fileutils'; FileUtils.rm_r('${dir_work}') if Dir.exist?('${dir_work}')"
+
+# Make workdir.
+sudo mkdir -p ${dir_work}
+
+# Make merged reads dir
+sudo mkdir -p ${dir_merged_reads}
+
+# Change user of work dir to this user.
+sudo chown "${env_user}:${env_group}" "${dir_work}"
+```
+
+# Merge reads
+
+File names look like this: `RI_1A1_S97_L001_R1_001.fastq.gz`.  We want the merged files to have simple names like this: `RI_1A1`.  Then it will be easier to add sample IDs when we combine all the demultiplexed files into a single file.
+
+```{bash}
+date && time sudo parallel \
+  --link \
+  --jobs 1 \
+  "flash \
+  --max-overlap 350 \
+  --threads 4 \
+  --to-stdout \
+  {2} \
+  {3} \
+  > ${dir_merged_reads}/{1}.fastq \
+  2> ${file_flash_log}" \
+  ::: $(ls ${dir_orig_reads}/*_R1_*.fastq.gz | xargs -l basename | cut -f1,2 -d'_' | sort | uniq) \
+  ::: ${dir_orig_reads}/*_R1_*.fastq.gz \
+  ::: ${dir_orig_reads}/*_R2_*.fastq.gz
+```
+
+# Pool samples
+
+We need to pool the samples.  We also want to append `;sample=SAMPLE_ID` to each of the read IDs and get rid of anything after the first space in the reads.  This way everything will be good for `vsearch` when making an OTU table.
+
+```{bash Pool samples}
+date && time ruby -e '
+Signal.trap("PIPE", "EXIT")
+
+require "abort_if"
+require "parse_fasta"
+
+include AbortIf
+
+ARGV.each do |fname|
+  extname = File.extname fname
+  sample_id = File.basename fname, extname
+
+  AbortIf.logger.info { "Working on #{sample_id}" }
+
+  read_num = 0
+  ParseFasta::SeqFile.open(fname).each_record do |rec|
+    read_num += 1
+    
+    rec.header = "#{sample_id}_#{read_num};sample=#{sample_id}"
+
+    puts rec
+  end
+end
+' ${dir_merged_reads}/*.fastq > ${file_all_fastq}
+```
+
+# Quality filter
+
+Just some basic quality filtering.  Using `fastp` defaults of throwing out any read that has > 40% bases less than quality of 20.  Also, any read with >1 `N` will be thrown out.  Also, any read longer than 550 will be discarded.  Finally, it will drop bases if a sliding window of 4 bases drops below mean quality score of 25 from the front or the back.
+
+```{bash}
+date && time fastp \
+  -i ${file_all_fastq} \
+  -o ${file_all_fastq_qual_trim} \
+  --qualified_quality_phred 20 \
+  --unqualified_percent_limit 40 \
+  --n_base_limit 1 \
+  --cut_front \
+  --cut_tail \
+  --cut_window_size 4 \
+  --cut_mean_quality 25 \
+  --length_limit 550 \
+  --thread 4
+```
+
+# Convert to fastA
+
+Literally just change the fastQ to fastA.
+
+```{bash}
+date && time vsearch \
+  --fastq_filter ${file_all_fastq_qual_trim} \
+  --fastaout ${file_all_reads}
+```
+

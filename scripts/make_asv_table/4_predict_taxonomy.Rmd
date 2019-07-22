@@ -1,0 +1,68 @@
+---
+title: "4. Predict Taxonomy"
+author: "Ryan M. Moore"
+date: "2019-07-05"
+output:
+  html_document
+params:
+  constants: "../constants.R"
+---
+
+```{r Set environmental variables}
+source(params$constants)
+
+# Set up the environmental variables.  Don't forget to run this if you change anything or restart the server!
+env_var_names <- gsub(".", "_", names(unlist(const)), fixed = TRUE)
+env_vars <- as.list(unlist(const, use.names = FALSE))
+names(env_vars) <- env_var_names
+do.call(Sys.setenv, env_vars)
+```
+
+# Set up taxonomy DB
+
+## Set up needed files
+
+```{bash}
+unpigz -c ${file_ncbi_taxonomy_names_gz} > ${file_ncbi_taxonomy_names}
+unpigz -c ${file_ncbi_taxonomy_nodes_gz} > ${file_ncbi_taxonomy_nodes}
+unpigz -c ${file_silva_ltp_fasta_gz} > ${file_silva_ltp_fasta}
+unpigz -c ${file_silva_ltp_taxonomy_gz} > ${file_silva_ltp_taxonomy}
+```
+
+## Convert SILVA file to SINTAX format
+
+We need to get the taxonomic ranks for everything in the SIVLA taxonomy file.
+
+```{bash}
+head ${file_silva_ltp_taxonomy} ${file_silva_ltp_fasta} ${file_ncbi_taxonomy_names} ${file_ncbi_taxonomy_nodes}
+ls ${dir_work}
+
+date && time make_silva_sintax_db \
+  --silva-tax ${file_silva_ltp_taxonomy} \
+  --silva-seqs ${file_silva_ltp_fasta} \
+  --names ${file_ncbi_taxonomy_names} \
+  --nodes ${file_ncbi_taxonomy_nodes} \
+  --outdir ${dir_work} \
+  2> ${file_make_silva_sintax_db_log}
+```
+
+# Predict Taxonomy
+
+## Sintax taxonomy prediction.
+
+We will use `vsearch --sintax` classifier to predict the taxonomy of the ASV sequences.
+
+- [Here](https://www.drive5.com/usearch/manual/nbc_algo.html) is some info by Robert Edgar about SINTAX vs. the Naive Bayes classifier.
+- [Here](https://www.drive5.com/usearch/manual/faq_tax_db.html) is what he has to say about which database to use with SINTAX.
+
+The `--sintax_cutoff 0.5` means there will be a fourth column with only those classifications that exceed `0.5` in the confidence metric.
+
+
+```{bash Predict taxonomy}
+date && time vsearch \
+  --threads ${param_num_threads} \
+  --db ${file_taxonomy_db} \
+  --sintax ${file_asv_seqs} \
+  --sintax_cutoff 0.5 \
+  --tabbedout ${file_taxonomy_predictions}
+```

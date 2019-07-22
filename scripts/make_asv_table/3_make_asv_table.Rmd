@@ -1,0 +1,72 @@
+---
+title: "3. Make ASV Table"
+author: "Ryan M. Moore"
+date: "2019-06-27"
+output:
+  html_document
+params:
+  constants: "../constants.R"
+---
+
+```{r Set environmental variables}
+source(params$constants)
+
+# Set up the environmental variables.  Don't forget to run this if you change anything or restart the server!
+env_var_names <- gsub(".", "_", names(unlist(const)), fixed = TRUE)
+env_vars <- as.list(unlist(const, use.names = FALSE))
+names(env_vars) <- env_var_names
+do.call(Sys.setenv, env_vars)
+```
+
+# Dereplication
+
+Now we can do dereplication, which identifies, merges, and sorts identical sequences by decreasing abundance, which is needed for unoise and swarm clustering.
+
+```{bash derep_fulllength}
+date && time vsearch \
+  --derep_fulllength ${file_all_reads} \
+  --sizeout \
+  --fasta_width 0 \
+  --output ${file_derep_seqs}
+```
+
+# Make ASVs
+
+## Cluster with UNOISE
+
+We generate ASVs with the unoise algorithm as implemented in VSEARCH.
+
+```{bash cluster_unoise}
+date && time vsearch \
+  --threads ${param_num_threads} \
+  --cluster_unoise ${file_derep_seqs} \
+  --centroids ${file_unoise_seqs} \
+  --relabel "Asv" \
+  --fasta_width 0 \
+  --sizeout
+```
+
+## Remove chimeras
+
+The VSEARCH version of unoise3 algorithm does not include chimera checking.  To do this we use `--uchime3_denovo`.
+
+```{bash Remove chimeras}
+date && time vsearch \
+  --uchime3_denovo ${file_unoise_seqs} \
+  --nonchimeras ${file_asv_seqs} \
+  --fasta_width 0 \
+  --xsize
+```
+
+# Make count table
+
+Search the reads against the ASVs.
+
+```{bash Make count table}
+date && time vsearch \
+  --threads ${param_num_threads} \
+  --usearch_global ${file_all_reads} \
+  --db ${file_asv_seqs} \
+  --id 0.97 \
+  --otutabout ${file_asv_count_table}
+```
